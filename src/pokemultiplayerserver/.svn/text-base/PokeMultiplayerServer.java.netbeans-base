@@ -1,0 +1,242 @@
+/*
+ * To change this template, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+package pokemultiplayerserver;
+
+import com.sun.corba.se.impl.protocol.giopmsgheaders.ReplyMessage;
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.SocketAddress;
+import java.net.SocketException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.xml.crypto.Data;
+
+/**
+ *
+ * @author Gebruiker
+ */
+public class PokeMultiplayerServer implements Runnable{
+    private final int port[];
+    private DatagramSocket socket;
+    private ServerSocket socket_chat;
+    
+    private Map<SocketAddress, AcceptedClient> list_clients;
+    
+    private int nextId;
+    
+    Manager manager;
+    
+    public PokeMultiplayerServer(){
+        this.port = new int[2];
+        for(int i = 0; i < this.port.length; i++)
+        {
+            System.out.println("Created " + i);
+            this.port[0] = 2406;
+            this.port[1] = this.port[0] + 1;
+        }
+        
+        this.nextId = 0;
+        this.list_clients = new HashMap<SocketAddress, AcceptedClient>();
+        
+    }
+    
+    private void setup() throws IOException {
+        this.socket = new DatagramSocket(this.port[0]);
+        this.socket_chat = new ServerSocket(this.port[1]);
+        
+        manager = new Manager(this, InetAddress.getLocalHost().getHostAddress());
+    }
+    
+    public void run(){
+        try{
+            this.setup();
+        } catch (IOException e){
+            System.err.println("Unable to setup: " + e.getMessage());
+            return;
+        }
+    
+        byte[] buffer = new byte[1024];
+        DatagramPacket dp = new DatagramPacket(buffer, 1024);
+    
+        while(true){
+            try{
+                this.socket.receive(dp);
+                
+                String data = new String(dp.getData(), 0, dp.getLength()).trim();
+                String[] args = data.split(":");
+                String command = args[0];
+                //System.out.println(data);
+                
+                String reply = null;
+                try{
+                    reply = handleCommand(dp, command, args);
+                } catch( Exception e ){
+                    System.err.println("Error while handling command: " + command);
+                    e.printStackTrace();
+                }
+                
+                if(reply != null){
+                    reply += "\n";
+                    DatagramPacket reply_packet = new DatagramPacket(reply.getBytes(), reply.length(), dp.getSocketAddress());
+                
+                    this.socket.send(reply_packet);
+                }
+            
+            } catch (IOException e){
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    public void kick(int id)
+    {
+        SocketAddress sa = null;
+        for( AcceptedClient ac : list_clients.values() )
+        {
+            if( ac.id == id )
+            {
+                sa = ac.getAddress();
+            }
+        }
+        if(sa != null)
+        {
+            String kickstring = "sK:0";
+            try {
+                DatagramPacket kickdp = new DatagramPacket(kickstring.getBytes(), kickstring.length(), sa);
+                socket.send(kickdp);
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        } else {
+            System.out.println("Ja, what the.");
+        }
+        
+        
+    }
+    
+
+
+    private String handleCommand(DatagramPacket dp, String command, String[] args){
+        //System.out.println("Handlecommand received " + args[1]);
+        if(command.equals("cj")){ // client join I
+            String username = args[1];
+            int charType = Integer.parseInt(args[2]);
+            int zone = Integer.parseInt(args[3]);
+            int subzone = Integer.parseInt(args[4]);
+            int id = this.nextId++;
+            SocketAddress addr = dp.getSocketAddress();
+            
+            //System.out.println("Player(" + id + ") " + username + " joined from " + dp.getAddress() + ", type " + charType);
+        
+            this.sendAll("sn:" + id + ":" + username + ":" + charType + ":" + zone + ":" + subzone); // server new player O
+            
+            this.list_clients.put(addr, new AcceptedClient(addr, id, username, charType, zone, subzone));
+            
+            try {
+                String yourID = "sw:" + id;
+                DatagramPacket IDdp = new DatagramPacket(yourID.getBytes(), yourID.length(), addr);
+                socket.send(IDdp); // server welcome O
+            } catch (IOException ex) {
+                System.err.println("Error sending welcome message.");
+                ex.printStackTrace();
+            }
+            
+            manager.addUser(id, new ManagerClient(addr, id, username, charType, zone, subzone));
+            
+            for( AcceptedClient ac : list_clients.values() )
+            {
+                try {
+                    if(ac.id != id)
+                    {
+                        String otherID = "sn:" + ac.id + ":" + ac.getUsername() + ":" + ac.getCharType() + ":" + ac.getZone() + ":" + ac.getSubzone();
+                        DatagramPacket IDdp = new DatagramPacket(otherID.getBytes(), otherID.length(), addr);
+                        socket.send(IDdp);
+                        String othercoord = "sc:" + ac.id + ":" + ac.getX() + ":" + ac.getY() + ":" + ac.getWalking();
+                        DatagramPacket coorddp = new DatagramPacket(othercoord.getBytes(), othercoord.length(), addr);
+                        socket.send(coorddp);
+                        System.out.println("Just sent ID " + ac.id + " as a welcome");
+                    }
+                } catch (IOException ex) {
+                    System.err.println("Error sending user ID's at welcome");
+                }
+            }
+        
+        
+        } else if( command.equals("cX") ){ // client exited I | id : type
+            AcceptedClient c = this.list_clients.get(dp.getSocketAddress());
+            
+            sendAll("sD:" + c.id + ":" + Integer.parseInt(args[1]));
+            
+            this.list_clients.remove(dp.getSocketAddress());
+            manager.removeUser(c.id);
+        } else if(command.equals("cc")){ // client coords-update I | x : y : walking
+            AcceptedClient c = this.list_clients.get(dp.getSocketAddress());
+            //System.out.println("AcceptdClient c = (" + c.getAddress() + ", " + c.id + ", " + c.getUsername() + ", " + c.getCharType());
+            
+            c.setX(Integer.parseInt(args[1]));
+            c.setY(Integer.parseInt(args[2]));
+            c.setWalking(Integer.parseInt(args[3]));
+            
+            sendAll("sc:" + c.id + ":" + c.getX() + ":" + c.getY() + ":" + c.getWalking()); // server coords-update O
+            
+            this.list_clients.put(dp.getSocketAddress(), c);
+            
+        } else if(command.equals("cz")){
+            AcceptedClient c = this.list_clients.get(dp.getSocketAddress());
+            
+            c.setX(Integer.parseInt(args[1]));
+            c.setY(Integer.parseInt(args[2]));
+            c.setWalking(Integer.parseInt(args[3]));
+            c.setZone(Integer.parseInt(args[4]));
+            c.setSubzone(Integer.parseInt(args[5]));
+            
+            sendAll("sz:" + c.id + ":" + c.getX() + ":" + c.getY() + ":" + c.getWalking() + ":" + c.getZone() + ":" + c.getSubzone());
+            
+            this.list_clients.put(dp.getSocketAddress(), c);
+            
+            manager.setUserZone( c.id, c.getZone(), c.getSubzone() );
+        } else if(command.equals("cb")){
+            AcceptedClient c = this.list_clients.get(dp.getSocketAddress());
+            
+            c.setBattling( Boolean.parseBoolean(args[1]) );
+            
+            sendAll( "sb:" + c.id + ":" + c.getBattling() );
+            
+            this.list_clients.put( dp.getSocketAddress(), c );
+        }
+    
+        return null;
+    }   
+    
+    private void sendAll(String data){
+        //System.out.println("sendAll received " + data);
+        DatagramPacket reply_packet = new DatagramPacket(data.getBytes(), data.length());
+        
+        for(AcceptedClient c: this.list_clients.values()){
+            reply_packet.setSocketAddress(c.getAddress());
+            try{
+                this.socket.send(reply_packet);
+            } catch (IOException e){
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    
+    /**
+     * @param args the command line arguments
+     */
+    public static void main(String[] args) {
+        PokeMultiplayerServer app = new PokeMultiplayerServer();
+        app.run();
+    }
+
+}

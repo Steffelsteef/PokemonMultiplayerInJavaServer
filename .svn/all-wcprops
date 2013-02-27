@@ -1,0 +1,21 @@
+K 26
+svn:wc:ra_dav:activity-url
+V 25
+/svn/schouts007/!svn/act/
+K 25
+svn:wc:ra_dav:version-url
+V 49
+/svn/schouts007/!svn/ver/85/PokeMultiplayerServer
+END
+manifest.mf
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/schouts007/!svn/ver/83/PokeMultiplayerServer/manifest.mf
+END
+build.xml
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/schouts007/!svn/ver/83/PokeMultiplayerServer/build.xml
+END
